@@ -1,0 +1,11 @@
+session_id,decision,reason
+G05-T1-01,accept,"Valid T1 statutory question; CA-11 exists in corpus, verbatim quote matches, and gold answer accurately states competency criteria without overclaiming the age of majority."
+G05-T1-02,accept,"Valid T1 statutory question; LA-4 exists in corpus, verbatim quote matches word-for-word, and answer accurately explains filing on the day the court re-opens."
+G05-T2-01,accept,"Valid T2 judgment question; SHC-138279 exists in corpus, both verbatim quotes match, and the dismissal and limitation holding are accurately summarized."
+G05-T2-02,accept,"Valid T2 judgment question; SHC-144205 exists in corpus, all three verbatim quotes match the corpus text, and the dismissal, title, and Rent Controller holdings are accurate."
+G05-T3-01,accept,"Valid multi-turn T3 question; key loan and dishonoured cheque facts appear in turns 1-2 (3+ turns before turn 5), PPC-489F quote matches verbatim, and memory_dependent/depends_on_turns are properly set."
+G05-T3-02,accept,"Valid multi-turn T3 question; immoveable property sale details appear in turn 1 (4 turns before turn 5), SRA-12 quote matches verbatim, and gold answer accurately explains specific performance and presumption."
+G05-T4-01,accept,"Valid multi-turn T4 question; PPC-337X is named in turn 1 (4 turns before turn 5), amendment quote (Act XV of 2010, w.e.f. 3-10-2007) matches verbatim, and 2010 is included in answer_keywords."
+G05-T4-02,accept,"Valid multi-turn T4 question; PPC-182 is named in turn 1 (4 turns before turn 5), corpus amendment notes confirm both the 1895 and 2017 substitutions, quote matches verbatim, and 2017 is in answer_keywords."
+G05-T5-01,accept,"Valid T5 abstention question; the Muslim Family Laws Ordinance, 1961 is completely absent from the corpus, and abstain is properly set to true with empty citations/evidence."
+G05-T5-02,accept,"Valid T5 abstention question; the Court Fees Act, 1870 and Punjab court-fee schedules are absent from the corpus, and abstain is properly set to true."

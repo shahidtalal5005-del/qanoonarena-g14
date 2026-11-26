@@ -1,0 +1,31 @@
+{
+  "run_id": "G00_M0+A0_smoke_s13_20261120-003807",
+  "group_id": "G00",
+  "config": "M0+A0",
+  "memory": "M0",
+  "adapter": "A0",
+  "seed": 13,
+  "split": "smoke",
+  "config_hash": "f1c935f7080e",
+  "adapter_hash": "none",
+  "backend": "mock",
+  "prompt_hash": "20043fdea53f",
+  "corpus_hash": "6e449a2a1669",
+  "n_sessions": 30,
+  "wall_clock_s": 2.2,
+  "python": "3.12.3",
+  "summary": {
+    "score": 31.58,
+    "accuracy": 0.2,
+    "citation_f1": 0.4167,
+    "abstain_f1": 0.0,
+    "memory_recall": 0.0833,
+    "efficiency": 1.0,
+    "tokens_per_turn": 1567,
+    "latency_p50_ms": 26,
+    "latency_p95_ms": 41,
+    "ungrounded_rate": 0,
+    "n_turns": 30
+  },
+  "warning": "MOCK BACKEND - not valid for submission"
+}

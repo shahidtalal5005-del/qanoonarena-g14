@@ -1,0 +1,31 @@
+{
+  "run_id": "G14_M2+A0_smoke_s13_20261122-004539",
+  "group_id": "G14",
+  "config": "M2+A0",
+  "memory": "M2",
+  "adapter": "A0",
+  "seed": 13,
+  "split": "smoke",
+  "config_hash": "f1c935f7080e",
+  "adapter_hash": "none",
+  "backend": "mock",
+  "prompt_hash": "20043fdea53f",
+  "corpus_hash": "6e449a2a1669",
+  "n_sessions": 30,
+  "wall_clock_s": 4.4,
+  "python": "3.12.3",
+  "summary": {
+    "score": 34.17,
+    "accuracy": 0.1667,
+    "citation_f1": 0.6667,
+    "abstain_f1": 0.0,
+    "memory_recall": 0.0,
+    "efficiency": 1.0,
+    "tokens_per_turn": 1363.4,
+    "latency_p50_ms": 51,
+    "latency_p95_ms": 96,
+    "ungrounded_rate": 0,
+    "n_turns": 30
+  },
+  "warning": "MOCK BACKEND - not valid for submission"
+}

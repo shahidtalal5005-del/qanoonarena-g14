@@ -1,0 +1,31 @@
+{
+  "run_id": "G14_M2+A1_dev_s42_20261125-144113",
+  "group_id": "G14",
+  "config": "M2+A1",
+  "memory": "M2",
+  "adapter": "A1",
+  "seed": 42,
+  "split": "dev",
+  "config_hash": "f1c935f7080e",
+  "adapter_hash": "417bf953ded4",
+  "backend": "hf",
+  "prompt_hash": "20043fdea53f",
+  "corpus_hash": "6e449a2a1669",
+  "n_sessions": 100,
+  "wall_clock_s": 2452.0,
+  "python": "3.13.16",
+  "summary": {
+    "score": 58.41,
+    "accuracy": 0.58,
+    "citation_f1": 0.5625,
+    "abstain_f1": 0.6154,
+    "memory_recall": 0.175,
+    "efficiency": 1.0,
+    "tokens_per_turn": 1426.9,
+    "latency_p50_ms": 8658,
+    "latency_p95_ms": 18652,
+    "ungrounded_rate": 0,
+    "n_turns": 100
+  },
+  "warning": ""
+}

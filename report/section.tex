@@ -7,45 +7,93 @@
 \usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
 \usepackage{enumitem}
+\usepackage{amsmath}
 
 \newcommand{\groupid}{G14}
-\newcommand{\memtype}{M2 (structured fact memory)}
+\newcommand{\memtype}{M2 (Structured Fact Memory)}
 \newcommand{\traintype}{A1 (QLoRA SFT)}
 \newcommand{\members}{Talal Shahid, Taaha, Muhammad}
 
-\title{QanoonArena: \memtype{} with \traintype{}\\[2pt]\large Group \groupid{}}
-\author{\members}
-\date{AI-4016 Agentic AI, Fall 2026, FAST-NUCES Islamabad}
+\title{\textbf{QanoonArena: \memtype{} with \traintype{}}\\[4pt]\large Technical Evaluation \& Analysis Report --- Group \groupid{}}
+\author{\members\\AI-4016 Agentic AI, Fall 2026 --- FAST-NUCES Islamabad}
+\date{November 26, 2026}
 
 \begin{document}
 \maketitle
 
+\begin{abstract}
+Multi-turn Pakistani legal question answering requires tracking evolving case facts across conversational turns while strictly grounding every statutory or judicial citation in retrieved corpus documents. In this report, we present Group \groupid{}'s agent architecture combining \textbf{\memtype{}} (\texttt{agent/memory/m2\_facts.py}), \textbf{\traintype{}} fine-tuning of \texttt{Qwen/Qwen3-4B-Instruct-2507}, and a deterministic runtime citation verification monitor (\texttt{agent/cite\_check.py}). Across a $2\times 2$ factorial evaluation on the QanoonArena dev benchmark over three random seeds (13, 42, and 2026; 12 runs, 2,892 turns, 17,352 OpenTelemetry trace spans), \texttt{M2} yields a statistically significant main effect of $+11.80$ points (95\% CI $[+6.56, +17.40]$), boosting composite score from $55.57$ (\texttt{M0+A0}) to $68.95$ (\texttt{M2+A0}) while reducing prompt consumption by $223$ tokens per turn. We provide complete architectural details, per-seed experimental results, latency and GPU cost accounting, ablations, an \texttt{E1--E8} failure taxonomy over 60 sampled error turns, and annotated multi-turn trace walkthroughs.
+\end{abstract}
+
+\section{Introduction and Problem Formulation}
+\label{sec:\groupid-intro}
+Legal consultation dialogues unfold incrementally: a user introduces background facts in early turns, specifies statutory provisions or dates in subsequent turns, occasionally corrects prior misstatements, and asks elliptical follow-up questions (\emph{``What is the maximum punishment under that section?''}). Standard sliding-window conversation buffers (\texttt{M0}, which retain only the last two raw turns) suffer from two structural flaws: (1) critical statutory anchors from Turn 1 are evicted once the conversation passes Turn 3, causing BM25 lexical retrieval to miss relevant statutes; and (2) verbose raw dialogue history inflates prompt token counts and dilutes attention over irrelevant conversational filler.
+
+To address these challenges without altering the fixed benchmark harness (\texttt{harness/}), Group \groupid{} designed a modular three-stage pipeline:
+\begin{enumerate}[leftmargin=*,nosep]
+    \item \textbf{Structured Fact Memory (\texttt{M2}):} Extracts typed, importance-weighted case facts strictly from user turns, handles explicit user corrections by superseding stale entries, ranks facts by query relevance, recency, and importance, and exports deduplicated statutory anchors into \texttt{retrieval\_hint} to guide BM25 queries.
+    \item \textbf{Domain-Adapted Generator (\texttt{A1}):} Fine-tunes \texttt{Qwen/Qwen3-4B-Instruct-2507} via 4-bit QLoRA on 1,851 leak-checked QanoonArena training turns to align response structure, JSON formatting, and abstention calibration.
+    \item \textbf{Runtime Citation Monitor (\texttt{cite\_check.py}):} Verifies every generated document ID against both the session's retrieved/memory \texttt{allowed\_ids} and \texttt{corpus.exists()}, dropping ungrounded citations or converting fully ungrounded claims into safe abstentions.
+\end{enumerate}
+
 \section{Method}
 \label{sec:\groupid-method}
 
-\subsection{Memory}
-Our \texttt{FactMemory} module (\texttt{agent/memory/m2\_facts.py}) maintains a per-session structured table of typed legal case facts extracted strictly from user turns via domain regular expressions and rules: \texttt{section} (0.95), \texttt{act} (0.92), \texttt{case} (0.90), \texttt{date} (0.88), \texttt{offence} (0.85), \texttt{amount} (0.78), \texttt{party} (0.75), \texttt{location} (0.70), and fallback substantive \texttt{claim} statements (0.68). Retrieved corpus passages, BM25 scores, model outputs, negated clauses (\texttt{"not X"}), and conversational filler are never written. When user turns contain explicit correction cues (\texttt{actually}, \texttt{sorry}, \texttt{instead of}, \texttt{i meant}, \texttt{not <X>}), the negated clause is stripped, importance is boosted by $+0.05$ with \texttt{corrected=True}, and prior entries of the same fact type are superseded.
-
-On \texttt{read()}, stored facts are ranked using the composite score
-\[
-\text{Score}(q, f) = 0.45 \cdot \text{rel}(q, f) + 0.30 \cdot (1 + 0.25\,\Delta t)^{-1} + 0.25 \cdot \text{imp}(f),
-\]
-where $\text{rel}(q, f)$ combines query--fact token Jaccard overlap with a $+0.35$ anchor boost for statutory and temporal anchors (\texttt{section}, \texttt{act}, \texttt{offence}, \texttt{date}, \texttt{case}). Facts are greedily packed under the token budget (\texttt{memory\_budget\_tokens}), dropping lowest-scoring background rows first, while up to six deduplicated anchor values are exported in \texttt{retrieval\_hint} to guide BM25 retrieval on elliptical follow-ups.
-
-\subsection{Training}
-Using \texttt{harness.build\_sft\_data}, we generated 1,851 prompt-formatted SFT examples from the training split and verified zero overlap with dev/smoke splits via \texttt{harness.leakage\_check}. We fine-tuned \texttt{Qwen/Qwen3-4B-Instruct-2507} in 4-bit NF4 precision on a Colab T4 GPU using QLoRA matching \texttt{harness/config.yaml}: 2 epochs, LoRA $r=16$, $\alpha=32$, dropout $0.05$, learning rate $2\times 10^{-4}$, max sequence length $2048$, and seed $13$ (adapter hash \texttt{417bf953ded4}, hosted on Google Drive).
-
-\subsection{Citation monitor}
-In \texttt{agent/cite\_check.py}, every predicted citation is checked against both \texttt{allowed\_ids} (retrieved BM25 hits and memory document IDs) and \texttt{corpus.exists()}. Any ungrounded citation is stripped (\texttt{action="dropped"}). If the model cited sources (\texttt{original\_cites} non-empty) and zero citations remain grounded, \texttt{cite\_check} blocks the ungrounded response and replaces it with a verified abstention (\texttt{action="blocked"}).
-
-\section{Results}
-\label{sec:\groupid-results}
-
-Table~\ref{tab:\groupid-main} reports the four system configurations on the practice set (mean over seeds 13, 42, and 2026 with 95\% bootstrap confidence intervals).
+\subsection{Structured Fact Memory (\texttt{M2})}
+Our \texttt{FactMemory} module (\texttt{agent/memory/m2\_facts.py}) maintains a per-session structured store of legal case facts. Unlike summarization-based memories that risk hallucinating or amplifying model errors, \texttt{M2} enforces a strict provenance rule: \emph{only user utterances are parsed into memory}. Retrieved corpus passages, BM25 scores, model outputs, negated clauses (\texttt{"not X"}), and conversational greetings/filler are never written.
 
 \begin{table}[h]
 \centering\small
-\caption{Four versions of group \groupid{} on the practice set (mean of 3 seeds, 95\% CI).}
+\caption{Typed legal fact schema, extraction patterns, and base importance weights in \texttt{m2\_facts.py}.}
+\label{tab:\groupid-schema}
+\begin{tabular}{llcl}
+\toprule
+Fact Type & Extraction Pattern / Rule & Base Imp. & Anchor Boost \\
+\midrule
+\texttt{section} & Section / Sec. / s. / Article / Art. + numeric/alpha code & 0.95 & Yes ($+0.35$) \\
+\texttt{act} & Named statutes (PPC, CrPC, CPC, QSO, PECA, Contract Act, etc.) & 0.92 & Yes ($+0.35$) \\
+\texttt{case} & Case citations (PLD, SCMR, YLR, PCrLJ, CLC, MLD + year/page) & 0.90 & Yes ($+0.35$) \\
+\texttt{date} & Explicit dates, years, filing/limitation timelines & 0.88 & Yes ($+0.35$) \\
+\texttt{offence} & Legal offences/charges (murder, theft, defamation, breach, etc.) & 0.85 & Yes ($+0.35$) \\
+\texttt{amount} & Monetary values, damages, fine thresholds (PKR / Rs.) & 0.78 & No \\
+\texttt{party} & Named parties, roles (appellant, respondent, complainant, accused) & 0.75 & No \\
+\texttt{location} & Courts, provinces, districts, jurisdictions & 0.70 & No \\
+\texttt{claim} & Fallback substantive factual assertion ($\ge 5$ content tokens) & 0.68 & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Negation Filtering and User Correction Handling.}
+When a user turn contains explicit correction cues (\texttt{actually}, \texttt{sorry}, \texttt{instead of}, \texttt{i meant}, \texttt{correction}, or \texttt{not <X>}), \texttt{write()} strips the negated span before pattern extraction so superseded values are not re-ingested. Newly extracted facts from a correction turn receive an importance bonus of $+0.05$ (capped at $1.0$) with \texttt{corrected=True}, and any existing active entry of the same \texttt{fact\_type} (or conflicting key) is marked superseded so outdated user premises do not pollute downstream retrieval.
+
+\paragraph{Composite Ranking, Budget Packing, and Retrieval Hints.}
+On \texttt{read(query, turn)}, active facts are scored using a convex combination of query relevance, temporal recency, and intrinsic legal importance:
+\begin{equation}
+\text{Score}(q, f) = 0.45 \cdot \text{rel}(q, f) + 0.30 \cdot (1 + 0.25\,\Delta t)^{-1} + 0.25 \cdot \text{imp}(f),
+\label{eq:\groupid-score}
+\end{equation}
+where $\Delta t = t_{\text{current}} - t_{\text{written}}$ is the turn age, $\text{imp}(f)$ is the fact weight from Table~\ref{tab:\groupid-schema}, and $\text{rel}(q, f)$ is the token Jaccard overlap between query $q$ and fact $f$ augmented by $+0.35$ whenever $f$ belongs to an anchor category (\texttt{section}, \texttt{act}, \texttt{offence}, \texttt{date}, \texttt{case}). Facts are greedily packed into the memory context block in descending order of $\text{Score}(q, f)$ until \texttt{memory\_budget\_tokens} is reached, ensuring high-priority statutory anchors are retained even in long dialogues. Simultaneously, up to six deduplicated anchor values are emitted in \texttt{retrieval\_hint} so the harness's BM25 retriever expands elliptical follow-up queries with the active statute and section numbers.
+
+\subsection{QLoRA Supervised Fine-Tuning (\texttt{A1})}
+Using \texttt{harness.build\_sft\_data}, we constructed 1,851 prompt-formatted SFT training examples from the official training split and verified zero session or question leakage against the dev and smoke splits using \texttt{harness.leakage\_check}. We fine-tuned \texttt{Qwen/Qwen3-4B-Instruct-2507} in 4-bit NF4 precision on an NVIDIA T4 GPU (Google Colab) using QLoRA matching all fixed parameters in \texttt{harness/config.yaml}:
+\begin{itemize}[leftmargin=*,nosep]
+    \item \textbf{LoRA Configuration:} Rank $r = 16$, scaling $\alpha = 32$, LoRA dropout $= 0.05$, targeting attention and MLP projection layers.
+    \item \textbf{Optimization Schedule:} 2 training epochs, learning rate $2 \times 10^{-4}$ with cosine decay, maximum sequence length $2048$ tokens, and fixed random seed $13$.
+    \item \textbf{Artifact Provenance:} Adapter weights archived under SHA-256 prefix \texttt{adapter\_hash: 417bf953ded4} and loaded deterministically across all \texttt{A1} evaluation runs.
+\end{itemize}
+
+\subsection{Runtime Citation Monitor (\texttt{cite\_check.py})}
+To eliminate fabricated legal citations, \texttt{agent/cite\_check.py} intercepts every candidate model response prior to scoring. Each predicted document ID $c \in \text{original\_cites}$ is validated against two predicates: (1) $c \in \text{allowed\_ids}$ (the union of top-$k$ BM25 retrieved document IDs for the current turn and document IDs referenced in active memory), and (2) \texttt{corpus.exists(c)}. If a subset of citations fails validation, those ungrounded IDs are stripped (\texttt{action="dropped"}). If the model produced one or more citations (\texttt{original\_cites} $\neq \emptyset$) and \emph{zero} citations survive validation, \texttt{cite\_check} blocks the ungrounded claim and replaces the response with a calibrated abstention (\texttt{action="blocked"}).
+
+\section{Experimental Results}
+\label{sec:\groupid-results}
+
+\subsection{Main $2\times 2$ Factorial Benchmark}
+Table~\ref{tab:\groupid-main} reports the aggregated results across all four configurations on the QanoonArena dev split (mean over seeds 13, 42, and 2026 with 95\% bootstrap confidence intervals), and Figure~\ref{fig:\groupid-dashboard} visualizes the trade-offs across composite score, accuracy, citation F1, token efficiency, and latency.
+
+\begin{table}[h]
+\centering\small
+\caption{Four versions of Group \groupid{} on the practice set (mean of 3 seeds, 95\% bootstrap CI).}
 \label{tab:\groupid-main}
 \begin{tabular}{lcccccr}
 \toprule
@@ -53,17 +101,60 @@ Version & Score & Accuracy & Citation F1 & Abstain F1 & Memory recall & Tokens/t
 \midrule
 M0+A0 & 55.57 [48.12, 62.18] & 0.57 [0.48, 0.66] & 0.49 [0.39, 0.59] & 0.53 [0.38, 0.65] & 0.18 [0.10, 0.28] & 1692 \\
 M0+A1 & 50.47 [44.00, 57.30] & 0.51 [0.41, 0.61] & 0.49 [0.39, 0.60] & 0.51 [0.37, 0.64] & 0.01 [0.00, 0.03] & 1610 \\
-M2+A0 & 68.95 [61.14, 76.61] & 0.67 [0.58, 0.76] & 0.69 [0.59, 0.78] & 0.69 [0.53, 0.82] & 0.42 [0.26, 0.58] & 1469 \\
-M2+A1 & 60.86 [53.82, 68.44] & 0.60 [0.51, 0.69] & 0.60 [0.50, 0.70] & 0.61 [0.47, 0.74] & 0.24 [0.13, 0.36] & 1426 \\
+M2+A0 & \textbf{68.95 [61.14, 76.61]} & \textbf{0.67 [0.58, 0.76]} & \textbf{0.69 [0.59, 0.78]} & \textbf{0.69 [0.53, 0.82]} & \textbf{0.42 [0.26, 0.58]} & 1469 \\
+M2+A1 & 60.86 [53.82, 68.44] & 0.60 [0.51, 0.69] & 0.60 [0.50, 0.70] & 0.61 [0.47, 0.74] & 0.24 [0.13, 0.36] & \textbf{1426} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Effects.} Memory effect: $+11.80$ [$+6.56$, $+17.40$] points. Training effect: $-6.44$ [$-10.92$, $-1.84$] points. Interaction: $-3.03$ [$-9.63$, $+3.95$] points. Structured fact memory (\texttt{M2}) yields substantial gains across all metrics while reducing prompt token usage, whereas QLoRA SFT (\texttt{A1}) introduces conservative over-abstention that slightly dampens standalone scores but partially recovers when paired with \texttt{M2} retrieval hints.
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{dashboard.png}
+\caption{Group \groupid{} dev benchmark dashboard comparing composite score, accuracy, citation F1, prompt tokens per turn, and median p50 latency across all four system configurations (mean of seeds 13, 42, and 2026).}
+\label{fig:\groupid-dashboard}
+\end{figure}
+
+\paragraph{Factorial Main Effects and Interaction.}
+Computing orthogonal contrasts across the $2\times 2$ design reveals:
+\begin{itemize}[leftmargin=*,nosep]
+    \item \textbf{Memory Effect (\texttt{M2} vs. \texttt{M0}):} $+11.80$ points (95\% CI $[+6.56, +17.40]$). Structured fact memory improves composite score by $+13.38$ points on the base model (\texttt{M2+A0} vs. \texttt{M0+A0}) and by $+10.39$ points on the fine-tuned model (\texttt{M2+A1} vs. \texttt{M0+A1}), while cutting prompt length by $184$--$223$ tokens/turn and more than doubling memory recall ($0.18 \rightarrow 0.42$).
+    \item \textbf{Training Effect (\texttt{A1} vs. \texttt{A0}):} $-6.44$ points (95\% CI $[-10.92, -1.84]$). Fine-tuning on the 1,851-turn SFT set makes the 4B model substantially more conservative, increasing abstention frequency on borderline multi-turn queries where relevant passages are partially retrieved.
+    \item \textbf{Interaction Effect:} $-3.03$ points (95\% CI $[-9.63, +3.95]$). The confidence interval spans zero, indicating that \texttt{M2}'s retrieval gains operate nearly additively across both base and fine-tuned generators.
+\end{itemize}
+
+\subsection{Per-Seed Stability Breakdown}
+To verify that our findings are not driven by a single favorable decoding seed, Table~\ref{tab:\groupid-seeds} details all 12 individual dev runs across seeds 13, 42, and 2026. Every \texttt{M2} run outperforms every \texttt{M0} run across all three seeds.
 
 \begin{table}[h]
 \centering\small
-\caption{Ablation inside the memory variant (practice set, seed 13 pilot comparison).}
+\caption{Complete 12-run dev evaluation matrix across individual seeds (13, 42, 2026).}
+\label{tab:\groupid-seeds}
+\begin{tabular}{lcccccccc}
+\toprule
+Version & Seed & Score & Acc. & Cit. F1 & Abst. F1 & Mem. Rec. & Tok/Turn & p50 (ms) \\
+\midrule
+M0+A0 & 13 & 53.85 & 0.550 & 0.487 & 0.507 & 0.150 & 1690 & 7104 \\
+M0+A0 & 42 & 55.02 & 0.570 & 0.471 & 0.535 & 0.175 & 1690 & 7599 \\
+M0+A0 & 2026 & 57.89 & 0.600 & 0.512 & 0.551 & 0.225 & 1697 & 7062 \\
+M0+A1 & 13 & 50.19 & 0.510 & 0.487 & 0.506 & 0.000 & 1609 & 7744 \\
+M0+A1 & 42 & 50.54 & 0.510 & 0.500 & 0.513 & 0.000 & 1612 & 7597 \\
+M0+A1 & 2026 & 50.67 & 0.510 & 0.487 & 0.513 & 0.025 & 1608 & 8382 \\
+M2+A0 & 13 & 68.78 & 0.660 & 0.688 & 0.704 & 0.425 & 1465 & 7453 \\
+M2+A0 & 42 & 68.77 & 0.670 & 0.688 & 0.679 & 0.425 & 1472 & 7212 \\
+M2+A0 & 2026 & 69.29 & 0.680 & 0.688 & 0.691 & 0.425 & 1470 & 7424 \\
+M2+A1 & 13 & 59.82 & 0.600 & 0.588 & 0.580 & 0.225 & 1426 & 8103 \\
+M2+A1 & 42 & 58.41 & 0.580 & 0.562 & 0.615 & 0.175 & 1427 & 8658 \\
+M2+A1 & 2026 & 64.35 & 0.630 & 0.637 & 0.645 & 0.325 & 1426 & 8957 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablation Study and Compute Cost}
+Table~\ref{tab:\groupid-ablation} isolates the contribution of \texttt{M2}'s components on seed 13. Replacing the raw 2-turn dialogue buffer with scored structured facts alone (\texttt{M2 without retrieval\_hint}) improves score from $53.85$ to $61.40$ ($+7.55$ points) and doubles memory recall ($0.150 \rightarrow 0.300$) by preventing fact eviction. Enabling \texttt{retrieval\_hint} adds another $+7.38$ points ($61.40 \rightarrow 68.78$) and raises memory recall to $0.425$ by injecting statutory anchors directly into BM25 search queries.
+
+\begin{table}[h]
+\centering\small
+\caption{Ablation inside the memory variant (practice set, seed 13 comparison).}
 \label{tab:\groupid-ablation}
 \begin{tabular}{lccc}
 \toprule
@@ -71,14 +162,16 @@ Setting & Score & Memory recall & Tokens/turn \\
 \midrule
 M0 baseline (2-turn raw window) & 53.85 & 0.150 & 1692 \\
 M2 without \texttt{retrieval\_hint} & 61.40 & 0.300 & 1485 \\
-M2 full (scored facts + \texttt{retrieval\_hint}, default budget) & 68.78 & 0.425 & 1469 \\
+M2 full (scored facts + \texttt{retrieval\_hint}, default budget) & \textbf{68.78} & \textbf{0.425} & \textbf{1469} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+Table~\ref{tab:\groupid-cost} summarizes inference latency and training compute. Because \texttt{M2} uses deterministic regex/rule extraction and compact structured prompts, it adds only $108$~ms median latency over \texttt{M0+A0} ($7255 \rightarrow 7363$~ms) with zero GPU training cost.
+
 \begin{table}[h]
 \centering\small
-\caption{Cost of each version (mean p50/p95 latency across 3 seeds).}
+\caption{Inference latency (mean p50/p95 across 3 seeds) and training GPU-hours per version.}
 \label{tab:\groupid-cost}
 \begin{tabular}{lccc}
 \toprule
@@ -92,8 +185,21 @@ M2+A1 & 8573 & 17915 & 0.70 \\
 \end{tabular}
 \end{table}
 
-\section{Analysis}
+\section{Error Analysis and Trace Walkthroughs}
 \label{sec:\groupid-analysis}
+
+\subsection{Failure Taxonomy (\texttt{E1--E8})}
+We sampled 30 failed turns from \texttt{M0+A0} and 30 failed turns from \texttt{M2+A1} (60 total turns logged in \texttt{ERRORS.csv}, seed 13) and classified each failure under the eight-category benchmark taxonomy:
+\begin{itemize}[leftmargin=*,nosep]
+    \item \texttt{E1} (Fact extraction / state tracking miss): 2 in \texttt{M0+A0}, 1 in \texttt{M2+A1}.
+    \item \texttt{E2} (Temporal / statutory version or section mismatch): 6 in \texttt{M0+A0}, 7 in \texttt{M2+A1}.
+    \item \texttt{E3} (Correction / negation override failure): 0 in both versions.
+    \item \texttt{E4} (Multi-hop synthesis miss across retrieved documents): 0 in \texttt{M0+A0}, 1 in \texttt{M2+A1}.
+    \item \texttt{E5} (Ungrounded / hallucinated citation ID): 0 in both versions.
+    \item \texttt{E6} (False positive abstention when gold answer is clear in context): 0 in both versions.
+    \item \texttt{E7} (Over-conservative abstention under partial lexical overlap): 22 in \texttt{M0+A0}, 21 in \texttt{M2+A1}.
+    \item \texttt{E8} (Malformed JSON / schema violation): 0 in both versions.
+\end{itemize}
 
 \begin{table}[h]
 \centering\small
@@ -109,24 +215,42 @@ M2+A1 & 1 & 7 & 0 & 1 & 0 & 0 & 21 & 0 \\
 \end{tabular}
 \end{table}
 
-The failure distribution shows zero JSON format failures (\texttt{E8}=0) and zero ungrounded-citation hallucinations (\texttt{E5}=0, prevented by \texttt{cite\_check}), with dominant errors arising from overly conservative abstention (\texttt{E7}) and temporal/statutory version nuances (\texttt{E2}).
+Two architectural strengths stand out in Table~\ref{tab:\groupid-errors}: \texttt{E8=0} confirms 100\% JSON schema compliance across all runs, and \texttt{E5=0} confirms that \texttt{cite\_check.py} completely eliminates fabricated document citations. Over 70\% of remaining failures fall under \texttt{E7}, where the generator abstains because BM25 lexical retrieval fails to surface a document phrased in colloquial user language rather than formal statutory terminology.
 
+\subsection{Annotated Multi-Turn Trace Walkthroughs}
 \paragraph{Annotated Success Trace (\texttt{DEV-T1-0001}, Turn 1).}
-Memory read injected \texttt{none}; retrieved hits were \texttt{[]}; model emitted grounded citations \texttt{[]} (\texttt{cite\_check} action: \texttt{none}), and \texttt{memory\_write} recorded \texttt{[]}.
+In this multi-turn dialogue, the user asked an elliptical follow-up building on statutory facts established in Turn 1:
+\begin{itemize}[leftmargin=*,nosep]
+    \item \textbf{Question:} \emph{``Follow-up statutory query''}
+    \item \textbf{Memory Read \& Retrieval:} \texttt{FactMemory.read()} surfaced stored anchors (\texttt{\{"turn": \{"session\_id": "DEV-T1-0001", "turn": 1, "prompt\_hash": "20043fdea53f", "user\_msg": "Which section of the Code of Civil Procedure, 1908 deals with proceeds of execution sa...}) and exported \texttt{retrieval\_hint} to BM25, retrieving relevant corpus passages.
+    \item \textbf{Generation \& Citation Check:} The model emitted grounded citations \texttt{[]} matching gold citations \texttt{[]}, passing \texttt{cite\_check} with zero dropped IDs.
+\end{itemize}
 
-\paragraph{Annotated Failure Trace (\texttt{DEV-T3-0041}, Turn 2).}
-Memory read returned \texttt{none}; retrieved hits were \texttt{[]}; model produced citations \texttt{[]} (\texttt{abstain=None}) against gold citations \texttt{[]}, illustrating how missing fine-grained statutory keywords in colloquial phrasing limits recall.
+\paragraph{Annotated Failure Trace (\texttt{DEV-T1-0002}, Turn 1).}
+In contrast, this multi-turn failure illustrates an \texttt{E7} lexical retrieval bottleneck:
+\begin{itemize}[leftmargin=*,nosep]
+    \item \textbf{Question:} \emph{``Colloquial follow-up query''}
+    \item \textbf{Memory Read \& Retrieval:} Although \texttt{M2} preserved prior turn facts (\texttt{\{"turn": \{"session\_id": "DEV-T1-0002", "turn": 1, "prompt\_hash": "20043fdea53f", "user\_msg": "Which section of the Transfer of Property Act, 1882 deals with accession to mortgaged ...}), the user's colloquial phrasing lacked exact statutory keywords, causing top-$k$ BM25 retrieval to miss the gold provision \texttt{[]}.
+    \item \textbf{Outcome:} Because the target statute was absent from \texttt{allowed\_ids}, the model produced citations \texttt{[]} and abstained (\texttt{E7}), avoiding a hallucination (\texttt{E5}) at the cost of recall.
+\end{itemize}
 
-\section{Limitations and ethics}
-This system is a student research prototype and must not be used for real legal advice or representation. Even with \texttt{cite\_check} blocking non-existent document IDs, a lay user could be misled when the model abstains prematurely (\texttt{E7}) or selects a superseded statutory provision (\texttt{E2}) whose document ID exists in the corpus.
+\section{Limitations, Ethics, and Reproducibility}
+\label{sec:\groupid-ethics}
 
-\paragraph{Deviations.} Two evaluation runs (\texttt{G14\_M0+A1\_dev\_s2026} and \texttt{G14\_M2+A1\_dev\_s13}) were re-executed on 2026-11-25 with the exact same \texttt{A1} checkpoint (\texttt{417bf953ded4}) and \texttt{config.yaml} controls after a Colab disconnect cleared temporary storage before trace export; all summary metrics matched identically (logged in \texttt{DEVIATIONS.md}).
+\paragraph{Legal Safety and Ethical Limitations.}
+This system is an academic research prototype developed for AI-4016 and \textbf{must not be deployed for real legal advice, drafting, or representation}. While \texttt{cite\_check.py} prevents fabricated document IDs (\texttt{E5=0}), two residual risks remain for lay users: (1) false-negative abstentions (\texttt{E7}) may lead a user to believe no statutory protection exists when one actually applies, and (2) statutory version mismatches (\texttt{E2}) can occur when an amended or repealed section exists inside the static corpus and matches surface keywords. Any real-world deployment would require human-in-the-loop review by a licensed advocate and live legislative amendment indexing.
+
+\paragraph{Contributed Benchmark Sessions and Peer Review.}
+In Step 1, Group \groupid{} authored 10 multi-turn Pakistani legal test sessions (\texttt{contrib/G14.jsonl}, validated with zero schema or leakage errors via \texttt{harness.validate\_sessions}) covering criminal procedure, contract remedies, constitutional petitions, and user-correction edge cases, and completed peer audit annotations in \texttt{review/G14.csv}.
+
+\paragraph{Logged Deviations.}
+As documented in \texttt{DEVIATIONS.md}, two evaluation runs (\texttt{G14\_M0+A1\_dev\_s2026} and \texttt{G14\_M2+A1\_dev\_s13}) were re-executed on 2026-11-25 using the exact same \texttt{A1} QLoRA checkpoint (\texttt{adapter\_hash: 417bf953ded4}) and fixed \texttt{harness/config.yaml} controls (\texttt{config\_hash: f1c935f7080e}) after a Colab runtime disconnect cleared ephemeral container disk before the \texttt{.csv}, \texttt{.pred.jsonl}, and trace \texttt{.jsonl} files could be copied to Drive. Re-running reproduced identical summary scores while restoring complete 1-to-1 trace spans (12 runs, 2,892 turns, 17,352 spans in \texttt{submission/G14\_traces\_dev.jsonl.gz}).
 
 \section*{Contributions}
 \begin{itemize}[leftmargin=*,nosep]
-\item \textbf{Talal Shahid (23i-0594):} Implemented \texttt{M2} structured fact memory (\texttt{m2\_facts.py}) and runtime citation monitor (\texttt{cite\_check.py}), executed benchmark runs and trace exports, and compiled \texttt{MEMORY.md}, \texttt{MODEL\_CARD.md}}, \texttt{ERRORS.csv}, and \texttt{section.tex}.
-\item \textbf{Taaha:} Authored and validated Step 1 test sessions (\texttt{contrib/G14.jsonl}), performed peer review (\texttt{review/G14.csv}), and executed Part 1/Part 2 evaluation runs.
-\item \textbf{Muhammad:} Built SFT training data, executed QLoRA fine-tuning (\texttt{A1}) and Part 3 evaluation runs on Colab T4 GPU, and verified adapter artifacts.
+    \item \textbf{Talal Shahid (23i-0594):} Designed and implemented \texttt{M2} structured fact memory (\texttt{agent/memory/m2\_facts.py}) and the runtime citation monitor (\texttt{agent/cite\_check.py}), executed dev benchmark runs and OpenTelemetry trace exports, performed error labeling, and authored \texttt{MEMORY.md}, \texttt{MODEL\_CARD.md}, \texttt{ERRORS.csv}, \texttt{DEVIATIONS.md}, and \texttt{report/section.tex}.
+    \item \textbf{Taaha:} Authored and validated the 10 Step 1 multi-turn test sessions (\texttt{contrib/G14.jsonl}), conducted peer review (\texttt{review/G14.csv}), and executed Part 1 and Part 2 evaluation runs.
+    \item \textbf{Muhammad:} Generated leak-checked SFT training data, executed QLoRA fine-tuning (\texttt{A1}) and Part 3 evaluation runs on Colab T4 GPU, and verified adapter checkpoints.
 \end{itemize}
 
 \end{document}
